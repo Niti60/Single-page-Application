@@ -51,7 +51,9 @@ const createLink = async (req, res) => {
             }
         }
 
-        const url = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/page/${pageId}`;
+        // URL is optional - frontend can construct it from pageId
+        // Removed FRONTEND_URL dependency to allow requests from everywhere
+        const url = `/page/${pageId}`;
 
         const newLink = new Link({
             title,

