@@ -133,15 +133,13 @@ if (missingVars.length > 0) {
 /*                                MIDDLEWARE                                  */
 /* -------------------------------------------------------------------------- */
 
-// CORS
+// CORS - Allow all origins (testing mode)
 app.use(
   cors({
-    origin: [
-      'http://localhost:8081',
-      'http://localhost:3000',
-      process.env.FRONTEND_URL,
-    ].filter(Boolean),
+    origin: true, // Allow all origins
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   })
 );
 
