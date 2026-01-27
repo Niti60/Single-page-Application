@@ -1,98 +1,137 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const linkSchema = new mongoose.Schema({
-    title: {
+  title: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+
+  pageId: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+
+  number: {
+    type: Number,
+    required: true,
+    unique: true,
+  },
+
+  url: {
+    type: String,
+  },
+
+  // ✅ Visitor Logs (Main Analytics Data)
+  logs: [
+    {
+      timestamp: {
         type: String,
-        required: true,
-        trim: true
-    },
-    pageId: {
-        type: String,
-        required: true,
-        unique: true
-    },
-    number: {
-        type: Number,
-        unique: true,
-        sparse: true // Allows null/undefined but ensures uniqueness when present
-    },
-    url: {
-        type: String,
-        // formatted url for display/storage purposes
-    },
-    logs: [{
-        timestamp: String,
-        request: {
-            ip: String,
-            rawIp: String,
-            referrer: String,
-            userAgent: String
-        },
-        device: {
-            browser: String,
-            os: String,
-            device: String,
-            deviceVendor: String,
-            deviceType: String
-        },
-        clientData: Object, // Store raw frontend data (expo-device)
-        permissions: {
-            location: String,
-            cameraview: String,
-            contacts: String,
-            media: String,
-            notification: String
-        },
+      },
+
+      // ✅ Request Info
+      request: {
+        ip: String,
+        rawIp: String,
+        referrer: String,
+        userAgent: String,
+      },
+
+      // ✅ Device Breakdown
+      device: {
+        browser: String,
+        os: String,
+        device: String,
+        deviceVendor: String,
+        deviceType: String,
+      },
+
+      // ✅ Raw Client Data (Expo Device etc.)
+      clientData: Object,
+
+      // ✅ Network + IP Intelligence
+      network: {
+        ip: String,
+
         location: {
-            latitude: Number,
-            longitude: Number,
-            altitude: Number,
-            accuracy: Number,
-            heading: Number,
-            speed: Number,
-            timestamp: Number
+          city: String,
+          region: String,
+          country: String,
+          continent: String,
+
+          region_code: String,
+          country_code: String,
+          continent_code: String,
+
+          latitude: String,
+          longitude: String,
+
+          time_zone: String,
+          locale_code: String,
+          metro_code: String,
+
+          is_in_european_union: Boolean,
         },
-        contacts: Array, // Array of contact objects
+
         network: {
-            ip: String,
-            location: {
-                city: String,
-                region: String,
-                country: String,
-                continent: String,
-                region_code: String,
-                country_code: String,
-                continent_code: String,
-                latitude: String,
-                longitude: String,
-                time_zone: String,
-                locale_code: String,
-                metro_code: String,
-                is_in_european_union: Boolean
-            },
-            network: {
-                network: String,
-                autonomous_system_number: String,
-                autonomous_system_organization: String
-            },
-            security: {
-                vpn: Boolean,
-                proxy: Boolean,
-                tor: Boolean,
-                relay: Boolean
-            },
-            is_private: Boolean // For localhost/private IP handling
+          network: String,
+          autonomous_system_number: String,
+          autonomous_system_organization: String,
         },
-        captures: {
-            image: String, // Cloudinary URL for image
-            audio: String  // Cloudinary URL for audio
-        }
-    }],
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
+
+        security: {
+          vpn: Boolean,
+          proxy: Boolean,
+          tor: Boolean,
+          relay: Boolean,
+        },
+
+        is_private: Boolean,
+      },
+
+      // ✅ Media Captures (Cloudinary URLs)
+      captures: {
+        image: String,
+        audio: String,
+      },
+
+      // ✅ Permission Status (Only These Matter)
+      permissions: {
+        location: {
+          type: String,
+          enum: ["granted", "denied", "not_requested", "blocked"],
+          default: "not_requested",
+        },
+        cameraview: {
+          type: String,
+          enum: ["granted", "denied", "not_requested", "blocked"],
+          default: "not_requested",
+        },
+        contacts: {
+          type: String,
+          enum: ["granted", "denied", "not_requested", "blocked"],
+          default: "not_requested",
+        },
+        media: {
+          type: String,
+          enum: ["granted", "denied", "not_requested", "blocked"],
+          default: "not_requested",
+        },
+        notification: {
+          type: String,
+          enum: ["granted", "denied", "not_requested", "blocked"],
+          default: "not_requested",
+        },
+      },
+    },
+  ],
+
+  // ✅ Created Timestamp
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
 });
 
-const Link = mongoose.model('Link', linkSchema);
-module.exports = Link;
+module.exports = mongoose.model("Link", linkSchema);

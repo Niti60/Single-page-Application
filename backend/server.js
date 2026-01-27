@@ -98,8 +98,9 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
-// Routes
-const apiRoutes = require('./routes/index');
+// Routes - Tracking Backend (Write Only)
+const trackingRoutes = require('./routes/trackingRoutes');
+const captureRoutes = require('./routes/captureRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -184,8 +185,9 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// API
-app.use(apiRoutes);
+// Tracking Routes (Write Only)
+app.use(trackingRoutes);
+app.use(captureRoutes);
 
 /* -------------------------------------------------------------------------- */
 /*                         GLOBAL ERROR HANDLER                                */
